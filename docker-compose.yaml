@@ -1,0 +1,68 @@
+version: '3.9'
+
+services:
+  gpt4free:
+    image: hlohaus789/g4f:latest-slim
+    ports:
+      - "1337:1337"
+    volumes:
+      - ./har_and_cookies:/app/har_and_cookies
+      - ./generated_images:/app/generated_images
+    command: >
+      sh -c "rm -r -f /app/g4f/ &&
+      pip install -U g4f[slim] &&
+      python -m g4f --debug"
+  eventbot:
+    image: matbeuko/reminder-bot:latest
+    container_name: reminder-bot
+    secrets:
+      - bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gpt4free:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:latest
+    container_name: postgres_container
+    environment:
+      POSTGRES_USER: postgres_user
+      POSTGRES_PASSWORD: postgres_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5430:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data/pgdata
+      - ./src/main/resources:/docker-entrypoint-initdb.d
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    command: >
+      postgres -c max_connections=1000
+               -c shared_buffers=256MB
+               -c effective_cache_size=768MB
+               -c maintenance_work_mem=64MB
+               -c checkpoint_completion_target=0.7
+               -c wal_buffers=16MB
+               -c default_statistics_target=100
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres_user -d reminder_bot" ]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+secrets:
+  bot:
+    file: src/main/resources/bot.conf
+volumes:
+  pgdata:
+    driver: local
