@@ -1,11 +1,12 @@
 package reminder.api
 
+import cats.data.OptionT
 import cats.effect.IO
 import cats.effect.std.Random
 import io.circe.generic.auto._
 import io.circe.syntax.EncoderOps
 import sttp.client3.circe.asJson
-import sttp.client3.{Identity, RequestT, SttpBackend, basicRequest}
+import sttp.client3.{Identity, Request, RequestT, SttpBackend, basicRequest}
 import sttp.model.Uri
 
 import scala.annotation.meta.param
@@ -17,19 +18,22 @@ case class GPTConfig(private val gptRequestTimeout: Int, gffEndpoint: String) {
 
 /** Produces no side effects on creation
   */
-class GptManager(backend: SttpBackend[IO, Any], config: GPTConfig) {
+class Gpt4free(backend: SttpBackend[IO, Any], config: GPTConfig) extends GptProvider {
 
   private val random              = Random.scalaUtilRandom[IO]
   private val providersEndpoint   = Uri.unsafeParse(config.gffEndpoint).addPath("providers")
   private val completionsEndpoint = Uri.unsafeParse(config.gffEndpoint).addPath("chat/completions")
+
+  def ask(text: String): OptionT[IO, String] =
+    ask(text, 1, _ => IO.pure(true))
 
   /** Sends [[param text]] request to [[param count]] GPTs at the same time and waits for at most
     * [[param timeout]] time for any of them to answer. Returns None if it didn't get any response
     * or the first response otherwise Useful when you want to generate a reply asap, with a cost of
     * making too many requests.
     */
-  def ask(text: String, count: Int, ensure: String => IO[Boolean]): IO[Option[String]] = {
-    for {
+  def ask(text: String, count: Int, ensure: String => IO[Boolean]): OptionT[IO, String] = {
+    val res = for {
       providersList <- providers
       batches       <- IO(providersList.grouped(count).toVector)
       rand          <- random
@@ -51,12 +55,12 @@ class GptManager(backend: SttpBackend[IO, Any], config: GPTConfig) {
         .option
         .map(_.flatten)
     } yield race
+    OptionT(res)
   }
 
-  private val providers: IO[List[String]] = getProviders.map(res => res.getOrElse(List[String]()))
-
+  private val providers: IO[List[String]] = getProviders.getOrElse(List[String]())
   private def postRequest[E, R](
-    request: RequestT[Identity, Either[E, R], Any]
+    request: Request[Either[E, R], Any]
   ): IO[Option[R]] =
     for {
       responseOpt <- backend.send(request).option
@@ -98,19 +102,20 @@ class GptManager(backend: SttpBackend[IO, Any], config: GPTConfig) {
     } yield response.flatMap(_.choices.headOption.map(_.message.content))
   }
 
-  private def getProviders: IO[Option[List[String]]] = {
+  private def getProviders: OptionT[IO, List[String]] = {
     case class Provider(id: String)
     val request = basicRequest
       .get(providersEndpoint)
       .header("Accept", "application/json")
       .response(asJson[List[Provider]])
-    for {
+    val res = for {
       providers <- postRequest(request)
       result <- providers match {
         case Some(list) => IO(Some(list.map(_.id)))
         case None       => IO.println("Couldn't load providers") *> IO(None)
       }
     } yield result
+    OptionT(res)
   }
 
 }

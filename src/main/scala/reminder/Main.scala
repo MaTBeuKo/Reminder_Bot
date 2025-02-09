@@ -1,12 +1,13 @@
 package reminder
 
 import akka.http.scaladsl.model.DateTime
+import canoe.api.TelegramClient
 import cats.effect.{ExitCode, IO, IOApp, Resource}
 import org.asynchttpclient.Dsl.asyncHttpClient
 import pureconfig.ConfigConvert.fromReaderAndWriter
 import pureconfig.ConfigSource
 import pureconfig.generic.auto._
-import reminder.api.{GPTConfig, GptManager}
+import reminder.api.{GPTConfig, Gpt4free}
 import reminder.bot.{BotConfig, TGBot}
 import reminder.dao.{DBConfig, DataBase}
 import reminder.notifier.Notifier
@@ -39,13 +40,25 @@ object Main extends IOApp {
       )
       startIO <- config match {
         case Right(cfg) =>
-          makeAsyncClient.use { asyncBackend =>
+          (
             for {
-              db  <- DataBase(cfg.database)
-              bot <- TGBot(new GptManager(asyncBackend, cfg.gpt), cfg.bot, db, asyncBackend)
-              _   <- Notifier.run(bot, db).start
+              asyncBackend <- makeAsyncClient
+              tgClient     <- TelegramClient[IO](cfg.bot.token)
+            } yield (asyncBackend, tgClient)
+          ).use { case (asyncBackend, tgClient) =>
+            for {
+              db <- DataBase(cfg.database)
+              bot <- TGBot(
+                new Gpt4free(asyncBackend, cfg.gpt),
+                cfg.bot,
+                db,
+                asyncBackend,
+                tgClient
+              )
+              _ <- Notifier.run(bot, db).start
               _ <- IO.println(s"reminder-bot started at ${DateTime.now.toIsoLikeDateTimeString()}")
-              start <- bot.run.as(ExitCode.Success)
+              start <- bot.run
+                .as(ExitCode.Success)
             } yield start
           }
         case Left(ex) =>

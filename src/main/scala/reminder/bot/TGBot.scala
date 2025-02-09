@@ -1,16 +1,17 @@
 package reminder.bot
 
-import canoe.api.{Bot, Scenario, TelegramClient, chatApi}
+import canoe.api.{Bot, Scenario, TelegramClient}
 import canoe.methods.messages.SendMessage
 import canoe.models.ChatId
-import canoe.models.messages.TextMessage
+import canoe.models.messages.{TelegramMessage, TextMessage}
 import canoe.syntax._
 import cats.effect.IO
-import fs2.Stream
-import reminder.api.GptManager
+import reminder.api.GptProvider
 import reminder.dao.DataBase
+import reminder.syntax.Pretty
 import sttp.client3.SttpBackend
-import canoe.syntax._
+
+import scala.language.higherKinds
 
 case class BotConfig(
   token: String,
@@ -20,81 +21,61 @@ case class BotConfig(
   bdcKey: String
 )
 
-class TGBot(manager: GptManager, config: BotConfig, db: DataBase, backend: SttpBackend[IO, Any]) {
+class TGBot(manager: GptProvider, config: BotConfig, db: DataBase, backend: SttpBackend[IO, Any])(
+  implicit
+  tg: TelegramClient[IO]
+) {
 
-  private val helper = new ResponseService(manager, config, db, backend)
-  private val client = TelegramClient[IO](config.token)
+  private val respond: ResponseService =
+    new ResponseServiceImpl(new EventMaker(manager, config), config, db, backend, sendMessage)
 
   def sendMessage(chatId: Long, text: String): IO[Unit] =
-    client.use(implicit c =>
-      SendMessage(ChatId(chatId), if (text.nonEmpty) text else "^_^").call.void
+    SendMessage(ChatId(chatId), text).call.flatMap(msg =>
+      IO.println("Message sent to: " + Pretty.prettyUser(msg.chat))
     )
 
-  private def location(implicit
-    telegramClient: TelegramClient[IO]
+  private def bind[T <: TelegramMessage](
+    pattern: Expect[T],
+    handler: T => IO[Unit]
   ): Scenario[IO, Unit] =
     for {
-      msg <- Scenario.expect(locationMessage)
-      _   <- Scenario.eval(helper.toLocation(msg))
+      msg <- Scenario.expect(pattern)
+      _   <- Scenario.eval(handler(msg).handleErrorWith(respond.handleFatal(msg.chat.id, _)))
     } yield ()
+
+  private def location: Scenario[IO, Unit] = bind(locationMessage, respond.toLocation)
 
   private val textNotCommand: Expect[TextMessage] = {
     case m: TextMessage if !m.text.startsWith("/") => m
   }
 
-  private def event(implicit
-    telegramClient: TelegramClient[IO]
-  ): Scenario[IO, Unit] =
-    for {
-      msg <- Scenario.expect(textNotCommand)
-      _   <- Scenario.eval(helper.toNewEvent(msg))
-    } yield ()
+  private def event: Scenario[IO, Unit] = bind(textNotCommand, respond.toNewEvent)
 
-  private def start(implicit
-    telegramClient: TelegramClient[IO]
-  ): Scenario[IO, Unit] =
-    for {
-      msg <- Scenario.expect(command("start"))
-      _   <- Scenario.eval(helper.toStart(msg))
-    } yield ()
+  private def start: Scenario[IO, Unit] = bind(command("start"), respond.toStart)
 
-  private def remove(implicit
-    telegramClient: TelegramClient[IO]
-  ): Scenario[IO, Unit] =
-    for {
-      msg <- Scenario.expect(command("pop"))
-      _   <- Scenario.eval(helper.toRemoveLast(msg))
-    } yield ()
+  private def pop: Scenario[IO, Unit] = bind(command("pop"), respond.toPop)
 
-  private def removeTopic(implicit
-    telegramClient: TelegramClient[IO]
-  ): Scenario[IO, Unit] =
-    for {
-      msg <- Scenario.expect(command("remove"))
-      _   <- Scenario.eval(helper.toRemove(msg))
-    } yield ()
+  private def remove: Scenario[IO, Unit] = bind(command("remove"), respond.toRemove)
+
+  private def logAny: Scenario[IO, Unit] = bind(
+    any,
+    (msg: TelegramMessage) => IO.println("Received message from: " + Pretty.prettyUser(msg.chat))
+  )
 
   def run: IO[Unit] =
-    Stream
-      .resource(client)
-      .flatMap(implicit client =>
-        Bot.polling[IO].follow(remove, start, event, location, removeTopic)
-      )
-      .compile
-      .drain
+    Bot.polling[IO].follow(pop, start, event, location, remove, logAny).compile.drain
 
 }
 
 object TGBot {
 
   def apply(
-    manager: GptManager,
+    manager: GptProvider,
     config: BotConfig,
     db: DataBase,
-    backend: SttpBackend[IO, Any]
+    backend: SttpBackend[IO, Any],
+    client: TelegramClient[IO]
   ): IO[TGBot] =
-    for {
-      res <- IO(new TGBot(manager, config, db, backend))
-    } yield res
+    IO(new TGBot(manager, config, db, backend)(client))
 
 }

@@ -12,6 +12,7 @@
 #
 # JARs aren't checked in, they are fetched by sbt
 #
+
 /pgdata/
 /lib/*.jar
 /test/files/codelib/*.jar

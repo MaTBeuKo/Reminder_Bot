@@ -13,6 +13,7 @@ dockerUpdateLatest := true
 dockerUsername := Some("matbeuko")
 
 libraryDependencies += "org.typelevel" %% "cats-effect" % "3.5.4"
+addCompilerPlugin("org.typelevel" % "kind-projector" % "0.13.2" cross CrossVersion.full)
 addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
 
 libraryDependencies += "com.softwaremill.sttp.client3" %% "core" % "3.10.1"
@@ -47,6 +48,12 @@ libraryDependencies += "com.github.pureconfig" %% "pureconfig" % "0.17.8"
 libraryDependencies += "com.github.cb372" %% "cats-retry" % "3.1.3"
 
 libraryDependencies += "org.augustjune" %% "canoe" % "0.6.0"
+
+// https://mvnrepository.com/artifact/org.mockito/mockito-scala
+libraryDependencies += "org.mockito" %% "mockito-scala" % "1.17.37" % Test
+// https://mvnrepository.com/artifact/org.powermock/powermock-api-mockito2
+libraryDependencies += "org.powermock" % "powermock-api-mockito2" % "2.0.9" % Test
+
 fork := true
 
 lazy val root = (project in file("."))

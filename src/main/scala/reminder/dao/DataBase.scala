@@ -41,11 +41,11 @@ class DataBase(config: DBConfig) {
          SET timezone_offset = $offset
     """.update.run.transact(xa).void
 
-  def getTimezone(userId: Long): IO[Int] =
+  def getTimezone(userId: Long): IO[Option[Int]] =
     sql"""
     SELECT timezone_offset FROM users
     WHERE user_id = $userId
-   """.query[Option[Int]].option.map(_.flatten.getOrElse(0)).transact(xa)
+   """.query[Option[Int]].option.map(_.flatten).transact(xa)
 
   def addEvent(event: DBEvent): IO[Unit] =
     sql"""
@@ -81,7 +81,7 @@ class DataBase(config: DBConfig) {
                WHERE message_id = ${event._1}
              """.update.run.transact(xa)
             result <- IO(Some(event._2))
-          } yield (result)
+          } yield result
         case None => IO(None)
       }
     } yield topicOpt
