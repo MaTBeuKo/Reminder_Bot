@@ -20,9 +20,7 @@ case class GPTConfig(private val gptRequestTimeout: Int, gffEndpoint: String) {
   def timeout: FiniteDuration = FiniteDuration(gptRequestTimeout, SECONDS)
 }
 
-/** Produces no side effects on creation
-  */
-class Gpt4free[F[+_]](backend: SttpBackend[F, Any], config: GPTConfig)(implicit
+class Gpt4free[F[+_]] private (backend: SttpBackend[F, Any], config: GPTConfig)(implicit
   M: Async[F]
 ) extends GptProvider {
 
@@ -144,5 +142,14 @@ class Gpt4free[F[+_]](backend: SttpBackend[F, Any], config: GPTConfig)(implicit
     } yield result
     OptionT(res)
   }
+
+}
+
+object Gpt4free {
+
+  def apply[F[+_]](backend: SttpBackend[F, Any], config: GPTConfig)(implicit
+    M: Async[F]
+  ): Gpt4free[F] =
+    new Gpt4free[F](backend, config)(M)
 
 }

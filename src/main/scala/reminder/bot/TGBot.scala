@@ -21,7 +21,7 @@ case class BotConfig(
   bdcKey: String
 )
 
-class TGBot[F[+_]](
+class TGBot[F[+_]] private (
   manager: GptProvider[F],
   config: BotConfig,
   db: DataBase[F],

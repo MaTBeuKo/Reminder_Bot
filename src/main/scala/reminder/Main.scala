@@ -49,7 +49,7 @@ object Main extends IOApp {
             for {
               db <- DataBase[IO](cfg.database)
               bot <- TGBot[IO](
-                new Gpt4free(asyncBackend, cfg.gpt),
+                Gpt4free(asyncBackend, cfg.gpt),
                 cfg.bot,
                 db,
                 asyncBackend,
