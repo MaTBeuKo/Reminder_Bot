@@ -31,26 +31,24 @@ class EventMaker(manager: GptProvider, config: BotConfig) {
   private def attempt(prompt: String): IO[Option[Event]] = {
     for {
       gptResponseStrOpt <- manager
-        .ask(prompt, config.gptCount, parseGptResponse(_).option.map(_.nonEmpty)).value
+        .ask(prompt, config.gptCount, parseGptResponse(_).nonEmpty)
+        .value
         .handleErrorWith(er => IO.println("ask throw exception: " + er) *> IO(None))
       event = for {
-        gptResponseStr <- IO.fromOption(gptResponseStrOpt)(
-          new Exception("gpt didnt respond correctly")
-        )
-        event <- parseGptResponse(gptResponseStr)
+        gptResponseStr <- gptResponseStrOpt
+        event          <- parseGptResponse(gptResponseStr)
       } yield event
-      either <- event.attempt
-      res <- either match {
-        case Left(er)     => IO.println("unsuccessful request because " + er.getMessage) *> IO(None)
-        case Right(event) => IO(Some(event))
+      res <- event match {
+        case None    => IO.println("unsuccessful attempt") *> IO(None)
+        case Some(_) => IO.pure(event)
       }
     } yield res
   }
 
-  private def parseGptResponse(text: String): IO[Event] =
+  private def parseGptResponse(text: String): Option[Event] =
     for {
-      json  <- IO.fromEither(parser.parse(text))
-      event <- Event.fromJson[IO](json)
+      json  <- parser.parse(text).toOption
+      event <- Event.fromJson(json)
     } yield event
 
 }
