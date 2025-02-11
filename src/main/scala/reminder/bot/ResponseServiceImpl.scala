@@ -15,7 +15,7 @@ import scala.concurrent.duration.{Duration, FiniteDuration, SECONDS}
 class ResponseServiceImpl(
   eventMaker: EventMaker,
   config: BotConfig,
-  db: DataBase,
+  db: DataBase[IO],
   backend: SttpBackend[IO, Any],
   send: (Long, String) => IO[Unit]
 ) extends ResponseService {

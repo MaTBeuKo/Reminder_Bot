@@ -50,7 +50,7 @@ class EventMaker(manager: GptProvider, config: BotConfig) {
   private def parseGptResponse(text: String): IO[Event] =
     for {
       json  <- IO.fromEither(parser.parse(text))
-      event <- Event.fromJson(json)
+      event <- Event.fromJson[IO](json)
     } yield event
 
 }

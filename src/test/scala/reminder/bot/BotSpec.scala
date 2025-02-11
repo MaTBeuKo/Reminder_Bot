@@ -1,13 +1,13 @@
 package reminder.bot
 
-import akka.http.scaladsl.model.DateTime
 import canoe.models.PrivateChat
 import canoe.models.messages.TextMessage
 import cats.MonadError
-import cats.effect.{Async, IO, Temporal}
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import io.circe.parser
 import org.mockito.ArgumentMatchers.{any, anyInt, anyLong, anyString}
-import org.mockito.{ArgumentMatchers, MockitoSugar}
+import org.mockito.MockitoSugar
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers._
 import reminder.api.GptProvider
@@ -15,13 +15,9 @@ import reminder.bot.talk.SayInEnglish
 import reminder.dao.DataBase
 import reminder.notifier.Event
 import sttp.client3.SttpBackend
+import cats.implicits._
 import cats._
-import cats.data.{EitherT, OptionT}
-import cats.effect.implicits.genSpawnOps_
 import cats.syntax.all._
-import io.circe.{Json, parser}
-
-import scala.concurrent.duration.Duration
 import scala.language.higherKinds
 
 class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
@@ -47,7 +43,7 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
 
   trait Db1 {
 
-    val dbS = mock[DataBase]
+    val dbS = mock[DataBase[IO]]
     when(dbS.deleteEventByName(1, "sample")).thenReturn(IO.pure(Some()))
     when(dbS.deleteLastAddedEvent(any())).thenReturn(IO(Some("sample")))
 
@@ -55,7 +51,7 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
 
   trait DbEmpty {
 
-    val dbS = mock[DataBase]
+    val dbS = mock[DataBase[IO]]
     when(dbS.deleteEventByName(any(), any())).thenReturn(IO.none)
     when(dbS.deleteLastAddedEvent(any())).thenReturn(IO.none)
 
@@ -87,7 +83,7 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
 
   trait DbNeutral {
 
-    val dbS = mock[DataBase]
+    val dbS = mock[DataBase[IO]]
     when(dbS.deleteEventByName(any(), any())).thenReturn(IO.none)
     when(dbS.deleteLastAddedEvent(any())).thenReturn(IO.none)
     when(dbS.getTime(anyLong())).thenReturn(IO.pure(Some(0)))
@@ -97,16 +93,30 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
 
   }
 
+
+  def attemptDivideApplicativeError[F[_]](x: Int, y: Int)(implicit ae: MonadError[F, String]): F[Int] = {
+    if (y == 0) ae.raiseError("divisor is error")
+    else {
+      ae.pure(x/y)
+    }
+  }
+  "test " should "test" in{
+    val res = attemptDivideApplicativeError[Either[String, *]](1, 2)
+
+    println(res)
+  }
   "toNewEvent" should "send handling and success telegram message for correct event" in new Service
     with DbNeutral {
     val plainEvent = "{\"topic\":\"sample\",\"time\":\"01-01T12:00:00\"}"
-    val eventIO    = Event.fromJson(parser.parse(plainEvent).getOrElse(throw new Exception()))
+    val eventIO    = Event.fromJson[IO](parser.parse(plainEvent).getOrElse(throw new Exception()))
     val event      = eventIO.unsafeRunSync()
     when(makerS.attemptN(anyString(), anyInt())).thenReturn(eventIO.map(Some(_)))
     val service = new ResponseServiceImpl(makerS, configS, dbS, backendS, sendS)
     service.toNewEvent(msg).unsafeRunSync()
     verify(sendS, times(1)).apply(1, say.handlingEvent)
     verify(sendS, times(1)).apply(1, say.eventPlanned(event, 0))
+
+
   }
 
 }

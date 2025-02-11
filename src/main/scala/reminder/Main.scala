@@ -47,7 +47,7 @@ object Main extends IOApp {
             } yield (asyncBackend, tgClient)
           ).use { case (asyncBackend, tgClient) =>
             for {
-              db <- DataBase(cfg.database)
+              db <- DataBase[IO](cfg.database)
               bot <- TGBot(
                 new Gpt4free(asyncBackend, cfg.gpt),
                 cfg.bot,

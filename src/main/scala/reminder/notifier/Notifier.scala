@@ -9,7 +9,7 @@ import scala.concurrent.duration.{Duration, SECONDS}
 
 object Notifier {
 
-  def run(bot: TGBot, db: DataBase): IO[Unit] = {
+  def run(bot: TGBot, db: DataBase[IO]): IO[Unit] = {
     (for {
       eventOpt <- db.getEarliestEvent()
       _ <- eventOpt match {

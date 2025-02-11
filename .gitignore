@@ -13,6 +13,8 @@
 # JARs aren't checked in, they are fetched by sbt
 #
 
+/src/main/resources/bot.conf
+
 /pgdata/
 /lib/*.jar
 /test/files/codelib/*.jar
