@@ -6,7 +6,7 @@ import io.circe.parser
 import reminder.api.GptProvider
 import reminder.notifier.Event
 
-class EventMaker(manager: GptProvider, config: BotConfig) {
+class EventMaker(manager: GptProvider[IO], config: BotConfig) {
 
   def makePrompt(text: String, tzOffset: Int): String = {
     import reminder.syntax.Pretty._

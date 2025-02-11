@@ -32,7 +32,7 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
   trait Service {
 
     val msg      = makeMsg("/remove sample")
-    val managerS = mock[GptProvider]
+    val managerS = mock[GptProvider[IO]]
     val makerS   = mock[EventMaker]
     val configS  = mock[BotConfig]
     val backendS = mock[SttpBackend[IO, Any]]
@@ -93,30 +93,28 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
 
   }
 
-
-  def attemptDivideApplicativeError[F[_]](x: Int, y: Int)(implicit ae: MonadError[F, String]): F[Int] = {
+  def attemptDivideApplicativeError[F[_]](x: Int, y: Int)(implicit
+    ae: MonadError[F, String]
+  ): F[Int] =
     if (y == 0) ae.raiseError("divisor is error")
-    else {
-      ae.pure(x/y)
-    }
-  }
-  "test " should "test" in{
+    else
+      ae.pure(x / y)
+
+  "test " should "test" in {
     val res = attemptDivideApplicativeError[Either[String, *]](1, 2)
 
     println(res)
   }
+
   "toNewEvent" should "send handling and success telegram message for correct event" in new Service
     with DbNeutral {
     val plainEvent = "{\"topic\":\"sample\",\"time\":\"01-01T12:00:00\"}"
-    val eventIO    = Event.fromJson[IO](parser.parse(plainEvent).getOrElse(throw new Exception()))
-    val event      = eventIO.unsafeRunSync()
-    when(makerS.attemptN(anyString(), anyInt())).thenReturn(eventIO.map(Some(_)))
+    val event      = Event.fromJson(parser.parse(plainEvent).getOrElse(throw new Exception()))
+    when(makerS.attemptN(anyString(), anyInt())).thenReturn(IO.pure(event))
     val service = new ResponseServiceImpl(makerS, configS, dbS, backendS, sendS)
     service.toNewEvent(msg).unsafeRunSync()
     verify(sendS, times(1)).apply(1, say.handlingEvent)
-    verify(sendS, times(1)).apply(1, say.eventPlanned(event, 0))
-
-
+    verify(sendS, times(1)).apply(1, say.eventPlanned(event.get, 0))
   }
 
 }

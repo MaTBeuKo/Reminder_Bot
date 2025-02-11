@@ -1,11 +1,13 @@
 package reminder.api
 
 import cats.data.OptionT
-import cats.effect.IO
+import cats.effect.Async
 
-trait GptProvider {
+import scala.language.higherKinds
 
-  def ask(text: String): OptionT[IO, String]
-  def ask(text: String, count: Int, ensure: String => Boolean): OptionT[IO, String]
+abstract class GptProvider[F[+_] : Async] {
+
+  def ask(text: String): OptionT[F, String]
+  def ask(text: String, count: Int, ensure: String => Boolean): OptionT[F, String]
 
 }

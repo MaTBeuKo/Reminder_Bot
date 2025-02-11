@@ -21,7 +21,7 @@ case class BotConfig(
   bdcKey: String
 )
 
-class TGBot(manager: GptProvider, config: BotConfig, db: DataBase[IO], backend: SttpBackend[IO, Any])(
+class TGBot(manager: GptProvider[IO], config: BotConfig, db: DataBase[IO], backend: SttpBackend[IO, Any])(
   implicit
   tg: TelegramClient[IO]
 ) {
@@ -70,7 +70,7 @@ class TGBot(manager: GptProvider, config: BotConfig, db: DataBase[IO], backend: 
 object TGBot {
 
   def apply(
-    manager: GptProvider,
+    manager: GptProvider[IO],
     config: BotConfig,
     db: DataBase[IO],
     backend: SttpBackend[IO, Any],

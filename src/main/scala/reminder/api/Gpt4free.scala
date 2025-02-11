@@ -1,17 +1,20 @@
 package reminder.api
 
 import cats.data.OptionT
-import cats.effect.IO
+import cats.effect.implicits.genTemporalOps
 import cats.effect.kernel.Outcome.Succeeded
 import cats.effect.std.Random
+import cats.effect.{Async, Spawn}
+import cats.implicits._
 import io.circe.generic.auto._
 import io.circe.syntax.EncoderOps
 import sttp.client3.circe.asJson
-import sttp.client3.{Identity, Request, RequestT, SttpBackend, basicRequest}
+import sttp.client3.{Request, SttpBackend, basicRequest}
 import sttp.model.Uri
-import cats.implicits._
+
 import scala.annotation.meta.param
 import scala.concurrent.duration.{FiniteDuration, SECONDS}
+import scala.language.higherKinds
 
 case class GPTConfig(private val gptRequestTimeout: Int, gffEndpoint: String) {
   def timeout: FiniteDuration = FiniteDuration(gptRequestTimeout, SECONDS)
@@ -19,30 +22,34 @@ case class GPTConfig(private val gptRequestTimeout: Int, gffEndpoint: String) {
 
 /** Produces no side effects on creation
   */
-class Gpt4free(backend: SttpBackend[IO, Any], config: GPTConfig) extends GptProvider {
+class Gpt4free[F[+_]](backend: SttpBackend[F, Any], config: GPTConfig)(implicit
+  M: Async[F]
+) extends GptProvider {
 
-  private val random              = Random.scalaUtilRandom[IO]
+  private val random              = Random.scalaUtilRandom[F]
   private val providersEndpoint   = Uri.unsafeParse(config.gffEndpoint).addPath("providers")
   private val completionsEndpoint = Uri.unsafeParse(config.gffEndpoint).addPath("chat/completions")
 
-  def ask(text: String): OptionT[IO, String] =
+  def ask(text: String): OptionT[F, String] =
     ask(text, 1, _ => true)
 
-  private def raceFirstSome[A](ioa: IO[Option[A]], iob: IO[Option[A]]): IO[Option[A]] = {
+  private def raceFirstSome[G[+_], A](a: G[Option[A]], b: G[Option[A]])(implicit
+    S: Spawn[G]
+  ): G[Option[A]] = {
     (for {
-      race <- IO.racePair(ioa, iob)
-      m = race match {
+      race <- S.racePair(a, b)
+      resAndFib = race match {
         case Left((Succeeded(a), fibB))  => (a, fibB)
-        case Left((_, fibB))             => (IO.pure(None), fibB)
+        case Left((_, fibB))             => (S.pure(None), fibB)
         case Right((fibA, Succeeded(b))) => (b, fibA)
-        case Right((fibA, _))            => (IO.pure(None), fibA)
+        case Right((fibA, _))            => (S.pure(None), fibA)
       }
       finalOpt = for {
-        opt <- m._1
-        fib = m._2
+        opt <- resAndFib._1
+        fib = resAndFib._2
       } yield opt match {
-        case Some(a) => fib.cancel *> IO.pure(Some(a))
-        case _       => fib.joinWith(IO.pure(None))
+        case Some(a) => fib.cancel *> S.pure(Some(a))
+        case _       => fib.joinWith(S.pure(None))
       }
     } yield finalOpt.flatten).flatten
   }
@@ -52,57 +59,45 @@ class Gpt4free(backend: SttpBackend[IO, Any], config: GPTConfig) extends GptProv
     * or the first response otherwise Useful when you want to generate a reply asap, with a cost of
     * making too many requests.
     */
-  def ask(text: String, count: Int, ensure: String => Boolean): OptionT[IO, String] = {
+  def ask(text: String, count: Int, ensure: String => Boolean): OptionT[F, String] = {
     val res = for {
       providersList <- providers
-      batches       <- IO(providersList.grouped(count).toVector)
+      batches       <- M.delay(providersList.grouped(count).toVector)
       rand          <- random
       batchId       <- rand.nextIntBounded(batches.size)
-      batch         <- IO(batches(batchId))
-      _             <- IO.println("Using following providers for request : " + batch.mkString(", "))
-      responses     <- IO(batch.map(getGptResponse(text, _, config.timeout)))
-      responses     <- IO(responses.map(opt => opt.filter(ensure)))
-//      responses <- IO(responses.map {opt =>
-//        if (opt.isEmpty) {
-//         OptionT[IO, String](IO.sleep(config.timeout) *> IO.pure(None))
-//      }else{
-//        other => other
-//      }
-//      })
+      batch         <- M.delay(batches(batchId))
+      _ <- M.delay(println("Using following providers for request : " + batch.mkString(", ")))
+      responses <- M.delay(batch.map(getGptResponse(text, _, config.timeout)))
+      responses <- M.delay(responses.map(opt => opt.filter(ensure)))
 
-//      responses <- IO(batch.map(getGptResponse(text, _, config.timeout).flatMap {
-//        case None => IO(None).andWait(config.timeout)
-//        case Some(x) =>
-//          (for {
-//            isGood <- ensure(x)
-//          } yield if (isGood) IO(Some(x)) else IO(None).andWait(config.timeout)).flatten
-//      }))
-
-      race <- responses.map(_.value)
-        .reduce((x, y) => raceFirstSome(x,y))
+      race <- responses
+        .map(_.value)
+        .reduce((x, y) => raceFirstSome(x, y))
         .timeout(config.timeout)
-        .option
+        .map(Option(_))
+        .handleError(_ => None)
         .map(_.flatten)
 
     } yield race
     OptionT(res)
   }
 
-  private val providers: IO[List[String]] = getProviders.getOrElse(List[String]())
+  private val providers: F[List[String]] = getProviders.getOrElse(List[String]())
 
   private def postRequest[E, R](
     request: Request[Either[E, R], Any]
-  ): IO[Option[R]] =
+  ): F[Option[R]] =
     for {
-      responseOpt <- backend.send(request).option
+      responseOpt <- backend.send(request).map(Option(_)).handleError(_ => None)
       res <- responseOpt.map(_.body) match {
         case Some(exOrRes) =>
           exOrRes match {
-            case Right(res) => IO(Some(res))
+            case Right(res) => M.delay(Some(res))
             case Left(ex) =>
-              IO.println("error while sending post request: " + ex.toString) *> IO(None)
+              M.delay(println("error while sending post request: " + ex.toString)) *> M.pure(None)
           }
-        case None => IO.println("error while sending post request, no response") *> IO(None)
+        case None =>
+          M.delay(println("error while sending post request, no response")) *> M.pure(None)
       }
     } yield res
 
@@ -116,7 +111,7 @@ class Gpt4free(backend: SttpBackend[IO, Any], config: GPTConfig) extends GptProv
     text: String,
     provider: String,
     requestTimeout: FiniteDuration
-  ): OptionT[IO, String] = {
+  ): OptionT[F, String] = {
 
     val chatRequest = ChatRequest(
       messages = List(Message("user", text)),
@@ -134,7 +129,7 @@ class Gpt4free(backend: SttpBackend[IO, Any], config: GPTConfig) extends GptProv
     OptionT(res)
   }
 
-  private def getProviders: OptionT[IO, List[String]] = {
+  private def getProviders: OptionT[F, List[String]] = {
     case class Provider(id: String)
     val request = basicRequest
       .get(providersEndpoint)
@@ -143,8 +138,8 @@ class Gpt4free(backend: SttpBackend[IO, Any], config: GPTConfig) extends GptProv
     val res = for {
       providers <- postRequest(request)
       result <- providers match {
-        case Some(list) => IO(Some(list.map(_.id)))
-        case None       => IO.println("Couldn't load providers") *> IO(None)
+        case Some(list) => M.delay(Some(list.map(_.id)))
+        case None       => M.delay(println("Couldn't load providers")) *> M.pure(None)
       }
     } yield result
     OptionT(res)
