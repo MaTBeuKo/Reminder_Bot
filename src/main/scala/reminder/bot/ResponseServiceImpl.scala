@@ -1,9 +1,9 @@
 package reminder.bot
 
 import canoe.models.messages.{LocationMessage, TextMessage}
-import cats.effect.IO
-import org.postgresql.util.PSQLException
-import reminder.api.{GptProvider, TimezoneManager}
+import cats.effect.Async
+import cats.implicits._
+import reminder.api.TimezoneManager
 import reminder.bot.talk.SayInEnglish
 import reminder.dao.{DBEvent, DataBase}
 import reminder.notifier.Event
@@ -11,39 +11,42 @@ import sttp.client3.SttpBackend
 
 import java.sql.SQLException
 import scala.concurrent.duration.{Duration, FiniteDuration, SECONDS}
+import scala.language.higherKinds
 
-class ResponseServiceImpl(
-  eventMaker: EventMaker,
+class ResponseServiceImpl[F[+_]](
+  eventMaker: EventMaker[F],
   config: BotConfig,
-  db: DataBase[IO],
-  backend: SttpBackend[IO, Any],
-  send: (Long, String) => IO[Unit]
+  db: DataBase[F],
+  backend: SttpBackend[F, Any],
+  send: (Long, String) => F[Unit]
+)(implicit
+  M: Async[F]
 ) extends ResponseService {
 
   private val timezoneManager = new TimezoneManager(config.bdcKey, backend)
   private val say             = new SayInEnglish
 
-  private def userTimeout(id: Long, newTime: Long): IO[FiniteDuration] = {
+  private def userTimeout(id: Long, newTime: Long): F[FiniteDuration] = {
     for {
       timeOpt <- db.getTime(id)
       res <- timeOpt match {
         case Some(time) =>
-          IO(Duration(Math.max(config.userTimeout - (newTime - time), 0), SECONDS))
-        case None => IO(Duration.Zero)
+          M.delay(Duration(Math.max(config.userTimeout - (newTime - time), 0), SECONDS))
+        case None => M.delay(Duration.Zero)
       }
-      _ <- if (res.toSeconds == 0) db.updateTime(id, newTime) else IO()
+      _ <- if (res.toSeconds == 0) db.updateTime(id, newTime) else M.pure()
     } yield res
   }
 
-  def handleFatal(chatId: Long, er: Throwable): IO[Unit] = er match {
+  def handleFatal(chatId: Long, er: Throwable): F[Unit] = er match {
     case ex: SQLException =>
-      IO.println("Fatal error on DB side: " + ex.getMessage) *> send(chatId, say.fatalError)
-    case _ => IO.raiseError(er)
+      M.delay(println("Fatal error on DB side: " + ex.getMessage)) *> send(chatId, say.fatalError)
+    case _ => M.raiseError(er)
   }
 
-  override def toNewEvent(msg: TextMessage): IO[Unit] =
+  override def toNewEvent(msg: TextMessage): F[Unit] =
     for {
-      _        <- IO.println(s"Received message from: ${msg.from}, chat id: ${msg.chat.id}")
+      _        <- M.delay(println(s"Received message from: ${msg.from}, chat id: ${msg.chat.id}"))
       duration <- userTimeout(msg.chat.id, msg.date)
       _ <-
         if (duration.toSeconds == 0) {
@@ -54,14 +57,14 @@ class ResponseServiceImpl(
               eventMaker.makePrompt(msg.text, timezone),
               config.gptRetries
             )
-            eventUtc <- IO(
+            eventUtc <- M.delay(
               eventOpt.map(e => Event(e.topic, e.time.minus(Duration(timezone, SECONDS).toMillis)))
             )
             _ <- eventUtc match {
               case Some(event) =>
                 val eventPlannedMsg = say.eventPlanned(event, timezone)
                 db.addEvent(DBEvent(-1, msg.chat.id, event.time.clicks, event.topic)) *>
-                  IO.println(eventPlannedMsg) *>
+                  M.delay(println(eventPlannedMsg)) *>
                   send(msg.chat.id, eventPlannedMsg)
               case None =>
                 send(
@@ -73,14 +76,14 @@ class ResponseServiceImpl(
         } else send(msg.chat.id, say.notSoFast(duration))
     } yield ()
 
-  override def toLocation(msg: LocationMessage): IO[Unit] =
+  override def toLocation(msg: LocationMessage): F[Unit] =
     for {
       zone <- timezoneManager.getTimezone(msg.location)
       _    <- db.updateTimezone(msg.chat.id, zone.utcOffsetSeconds)
       _    <- send(msg.chat.id, say.timezoneSet(zone.ianaTimeId))
     } yield ()
 
-  override def toPop(msg: TextMessage): IO[Unit] =
+  override def toPop(msg: TextMessage): F[Unit] =
     for {
       topicOpt <- db.deleteLastAddedEvent(msg.chat.id)
       _ <- topicOpt match {
@@ -89,7 +92,7 @@ class ResponseServiceImpl(
       }
     } yield ()
 
-  override def toRemove(msg: TextMessage): IO[Unit] = {
+  override def toRemove(msg: TextMessage): F[Unit] = {
     val topic = msg.text.split(' ') match {
       case ar if ar.length == 1 => None
       case ar                   => Some(ar.tail.reduce((x, y) => x + ' ' + y))
@@ -97,7 +100,7 @@ class ResponseServiceImpl(
     for {
       removed <- topic match {
         case Some(s) => db.deleteEventByName(msg.chat.id, s)
-        case None    => IO(None)
+        case None    => M.pure(None)
       }
       _ <- (removed, topic) match {
         case (Some(_), Some(txt)) => send(msg.chat.id, say.eventRemoved(txt))
@@ -107,9 +110,6 @@ class ResponseServiceImpl(
     } yield ()
   }
 
-  override def toStart(msg: TextMessage): IO[Unit] = send(msg.chat.id, say.start).void
-
-  override def toRu(msg: TextMessage): IO[Unit] = ???
-  override def toEn(msg: TextMessage): IO[Unit] = ???
+  override def toStart(msg: TextMessage): F[Unit] = send(msg.chat.id, say.start).void
 
 }

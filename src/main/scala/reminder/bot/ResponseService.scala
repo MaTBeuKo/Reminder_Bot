@@ -1,23 +1,22 @@
 package reminder.bot
 
-import canoe.api.TelegramClient
-import canoe.models.messages.{LocationMessage, TelegramMessage, TextMessage}
-import cats.effect.IO
+import canoe.models.messages.{LocationMessage, TextMessage}
+import cats.effect.kernel.Async
 
-trait ResponseService {
+import scala.language.higherKinds
 
-  def toNewEvent(msg: TextMessage): IO[Unit]
+abstract class ResponseService[F[_]: Async] {
 
-  def toLocation(msg: LocationMessage): IO[Unit]
+  def toNewEvent(msg: TextMessage): F[Unit]
 
-  def toPop(msg: TextMessage): IO[Unit]
+  def toLocation(msg: LocationMessage): F[Unit]
 
-  def toRemove(msg: TextMessage): IO[Unit]
+  def toPop(msg: TextMessage): F[Unit]
 
-  def toStart(msg: TextMessage): IO[Unit]
+  def toRemove(msg: TextMessage): F[Unit]
 
-  def toRu(msg: TextMessage): IO[Unit]
-  def toEn(msg: TextMessage): IO[Unit]
-  def handleFatal(chatId: Long, er: Throwable): IO[Unit]
+  def toStart(msg: TextMessage): F[Unit]
+
+  def handleFatal(chatId: Long, er: Throwable): F[Unit]
 
 }
