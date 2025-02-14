@@ -1,23 +1,18 @@
-package reminder.dao
+package reminder.persistence
 
-import cats.effect.Async
+import cats.effect.{Async, MonadCancelThrow}
 import cats.implicits._
 import doobie.implicits._
+import doobie.util.transactor
 import doobie.{Transactor, Write}
 
 import scala.language.higherKinds
 
 case class DBConfig(dbDriver: String, dbUrl: String, dbUser: String, dbPassword: String)
 
-class DataBase[F[_]](config: DBConfig)(implicit M : Async[F]) {
-
-  val xa = Transactor.fromDriverManager[F](
-    driver = config.dbDriver,
-    url = config.dbUrl,
-    user = config.dbUser,
-    password = config.dbPassword,
-    logHandler = None
-  )
+class DataBaseImpl[F[_]] private (xa: transactor.Transactor[F])(implicit
+  M: MonadCancelThrow[F]
+) extends DataBase[F] {
 
   implicit val eventWriter: Write[DBEvent] =
     Write[(Long, Long, String)].contramap(e => (e.userId, e.time, e.topic))
@@ -113,7 +108,7 @@ class DataBase[F[_]](config: DBConfig)(implicit M : Async[F]) {
     } yield res
   }
 
-  def getEarliestEvent(): F[Option[DBEvent]] =
+  def getEarliestEvent: F[Option[DBEvent]] =
     sql"""
     SELECT message_id, user_id, event_epoch, topic FROM events
     ORDER BY event_epoch ASC
@@ -124,9 +119,17 @@ class DataBase[F[_]](config: DBConfig)(implicit M : Async[F]) {
 
 }
 
-object DataBase {
+object DataBaseImpl {
 
-  def apply[F[_]](config: DBConfig)(implicit M : Async[F]): F[DataBase[F]] =
-    M.delay(new DataBase[F](config)(M))
+  def apply[F[_]: Async](config: DBConfig): F[DataBase[F]] = {
+    val xa = Transactor.fromDriverManager[F](
+      driver = config.dbDriver,
+      url = config.dbUrl,
+      user = config.dbUser,
+      password = config.dbPassword,
+      logHandler = None
+    )
+    Async[F].pure(new DataBaseImpl[F](xa))
+  }
 
 }

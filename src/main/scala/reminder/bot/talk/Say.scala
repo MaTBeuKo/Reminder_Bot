@@ -15,7 +15,7 @@ trait Say {
   def noEvents: String
   def provideTopic: String
   def noSuchEvent: String
-  def start: String
+  def start(zone: Int): String
   def fatalError: String
 
 }

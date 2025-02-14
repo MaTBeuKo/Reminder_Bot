@@ -5,12 +5,15 @@ import canoe.methods.messages.SendMessage
 import canoe.models.ChatId
 import canoe.models.messages.{TelegramMessage, TextMessage}
 import canoe.syntax._
-import cats.effect.Async
-import reminder.api.GptProvider
-import reminder.dao.DataBase
+import cats.{Monad, MonadThrow}
+import cats.effect.{Async, Concurrent}
+import cats.implicits._
+import org.typelevel.log4cats.LoggerFactory
+import reminder.persistence.DataBase
+import reminder.gpt.GptProvider
 import reminder.syntax.Pretty
 import sttp.client3.SttpBackend
-import cats.implicits._
+
 import scala.language.higherKinds
 
 case class BotConfig(
@@ -18,32 +21,29 @@ case class BotConfig(
   gptCount: Int,
   gptRetries: Int,
   userTimeout: Long,
-  bdcKey: String
+  bdcKey: String,
+  defaultTimezone: Int
 )
 
-class TGBot[F[+_]] private (
-  manager: GptProvider[F],
-  config: BotConfig,
-  db: DataBase[F],
-  backend: SttpBackend[F, Any]
-)(implicit
-  tg: TelegramClient[F],
-  M: Async[F]
+trait Send[F[_]] {
+  def sendMessage(chatId: Long, text: String): F[Unit]
+}
+
+object Send {
+
+  def apply[F[_]: TelegramClient: Monad: LoggerFactory]: Send[F] =
+    (chatId: Long, text: String) =>
+      SendMessage(ChatId(chatId), text).call.flatMap(msg =>
+        LoggerFactory[F].getLogger.info("Message sent to: " + Pretty.prettyUser(msg.chat))
+      )
+
+}
+
+class TGBot[F[_]: TelegramClient: MonadThrow: LoggerFactory] private (
+  respond: ResponseService[F]
 ) {
 
-  private val respond: ResponseService[F] =
-    new ResponseServiceImpl[F](
-      new EventMaker(manager, config),
-      config,
-      db,
-      backend,
-      sendMessage
-    )
-
-  def sendMessage(chatId: Long, text: String): F[Unit] =
-    SendMessage(ChatId(chatId), text).call.flatMap(msg =>
-      M.delay(println("Message sent to: " + Pretty.prettyUser(msg.chat)))
-    )
+  def sendMessage(chatId: Long, text: String): F[Unit] = Send[F].sendMessage(chatId, text)
 
   private def bind[T <: TelegramMessage](
     pattern: Expect[T],
@@ -71,23 +71,36 @@ class TGBot[F[+_]] private (
   private def logAny: Scenario[F, Unit] = bind(
     any,
     (msg: TelegramMessage) =>
-      M.delay(println("Received message from: " + Pretty.prettyUser(msg.chat)))
+      LoggerFactory[F].getLogger.info("Received message from: " + Pretty.prettyUser(msg.chat))
   )
 
-  def run: F[Unit] =
+  def run(implicit
+    C: Concurrent[F]
+  ): F[Unit] =
     Bot.polling[F].follow(pop, start, event, location, remove, logAny).compile.drain
 
 }
 
 object TGBot {
 
-  def apply[F[+_]: Async](
+  def apply[F[_]: Async: LoggerFactory](
     manager: GptProvider[F],
     config: BotConfig,
     db: DataBase[F],
     backend: SttpBackend[F, Any],
     client: TelegramClient[F]
   ): F[TGBot[F]] =
-    Async[F].delay(new TGBot(manager, config, db, backend)(client, Async[F]))
+    Async[F].delay({
+      implicit val tg: TelegramClient[F] = client
+      val resp: ResponseService[F] =
+        ResponseService[F](
+          EventMaker[F](manager, config),
+          config,
+          db,
+          backend,
+          Send[F]
+        )
+      new TGBot(resp)(tg, Async[F], LoggerFactory[F])
+    })
 
 }

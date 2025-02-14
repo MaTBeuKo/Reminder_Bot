@@ -28,9 +28,9 @@ class SayInEnglish extends Say {
 
   override def noSuchEvent: String = "This event doesn't exist"
 
-  override def start: String = "Hi!\n" +
+  override def start(zone: Int): String = "Hi!\n" +
     "I can remind you about any event, just send me description and time of it (possibly with time zone)\n" +
-    "To start send me your location (any location in your time zone) or UTC will be used by default"
+    s"To start send me your location (any location in your time zone) or UTC+$zone will be used by default"
 
   override def fatalError: String = "Service unavailable, try again later..."
 }

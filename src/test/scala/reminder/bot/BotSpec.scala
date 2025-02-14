@@ -2,18 +2,17 @@ package reminder.bot
 
 import canoe.models.PrivateChat
 import canoe.models.messages.TextMessage
-import cats.MonadError
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import cats.implicits._
 import io.circe.parser
 import org.mockito.ArgumentMatchers.{any, anyInt, anyLong, anyString}
 import org.mockito.MockitoSugar
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers._
-import reminder.api.GptProvider
+import org.typelevel.log4cats.slf4j.loggerFactoryforSync
 import reminder.bot.talk.SayInEnglish
-import reminder.dao.DataBase
+import reminder.persistence.DataBase
+import reminder.gpt.GptProvider
 import reminder.notifier.Event
 import sttp.client3.SttpBackend
 
@@ -35,8 +34,8 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
     val makerS   = mock[EventMaker[IO]]
     val configS  = mock[BotConfig]
     val backendS = mock[SttpBackend[IO, Any]]
-    val sendS    = mock[(Long, String) => IO[Unit]]
-    when(sendS.apply(any(), any())).thenReturn(IO.unit)
+    val sendS    = mock[Send[IO]]
+    when(sendS.sendMessage(any(), any())).thenReturn(IO.unit)
 
   }
 
@@ -57,27 +56,27 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
   }
 
   "remove" should "send success telegram message when event present" in new Service with Db1 {
-    val service = new ResponseServiceImpl(makerS, configS, dbS, backendS, sendS)
+    val service = ResponseService(makerS, configS, dbS, backendS, sendS)
     service.toRemove(msg).unsafeRunSync()
-    verify(sendS, times(1)).apply(1, say.eventRemoved("sample"))
+    verify(sendS, times(1)).sendMessage(1, say.eventRemoved("sample"))
   }
 
   "remove" should "send error telegram message if no event present" in new Service with DbEmpty {
-    val service = new ResponseServiceImpl(makerS, configS, dbS, backendS, sendS)
+    val service = ResponseService(makerS, configS, dbS, backendS, sendS)
     service.toRemove(msg).unsafeRunSync()
-    verify(sendS, times(1)).apply(1, say.noSuchEvent)
+    verify(sendS, times(1)).sendMessage(1, say.noSuchEvent)
   }
 
   "pop" should "send success telegram message when some event present" in new Service with Db1 {
-    val service = new ResponseServiceImpl(makerS, configS, dbS, backendS, sendS)
+    val service = ResponseService(makerS, configS, dbS, backendS, sendS)
     service.toPop(msg).unsafeRunSync()
-    verify(sendS, times(1)).apply(1, say.eventRemoved("sample"))
+    verify(sendS, times(1)).sendMessage(1, say.eventRemoved("sample"))
   }
 
   "pop" should "send error telegram message if no event present" in new Service with DbEmpty {
-    val service = new ResponseServiceImpl(makerS, configS, dbS, backendS, sendS)
+    val service = ResponseService(makerS, configS, dbS, backendS, sendS)
     service.toPop(msg).unsafeRunSync()
-    verify(sendS, times(1)).apply(1, say.noEvents)
+    verify(sendS, times(1)).sendMessage(1, say.noEvents)
   }
 
   trait DbNeutral {
@@ -97,10 +96,10 @@ class BotSpec extends AnyFlatSpec with should.Matchers with MockitoSugar {
     val plainEvent = "{\"topic\":\"sample\",\"time\":\"01-01T12:00:00\"}"
     val event      = Event.fromJson(parser.parse(plainEvent).getOrElse(throw new Exception()))
     when(makerS.attemptN(anyString(), anyInt())).thenReturn(IO.pure(event))
-    val service = new ResponseServiceImpl(makerS, configS, dbS, backendS, sendS)
+    val service = ResponseService(makerS, configS, dbS, backendS, sendS)
     service.toNewEvent(msg).unsafeRunSync()
-    verify(sendS, times(1)).apply(1, say.handlingEvent)
-    verify(sendS, times(1)).apply(1, say.eventPlanned(event.get, 0))
+    verify(sendS, times(1)).sendMessage(1, say.handlingEvent)
+    verify(sendS, times(1)).sendMessage(1, say.eventPlanned(event.get, 0))
   }
 
 }

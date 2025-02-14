@@ -2,7 +2,6 @@ package reminder.syntax
 
 import akka.http.scaladsl.model.DateTime
 import canoe.models.{Chat, PrivateChat}
-import cats.effect.IO
 
 import scala.concurrent.duration.{Duration, HOURS, SECONDS}
 

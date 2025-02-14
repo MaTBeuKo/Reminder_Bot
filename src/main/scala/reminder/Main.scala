@@ -2,17 +2,23 @@ package reminder
 
 import akka.http.scaladsl.model.DateTime
 import canoe.api.TelegramClient
+import cats.Monad
 import cats.effect.{ExitCode, IO, IOApp, Resource}
 import org.asynchttpclient.Dsl.asyncHttpClient
+import org.typelevel.log4cats.{LoggerFactory, SelfAwareStructuredLogger}
+import org.typelevel.log4cats.slf4j.loggerFactoryforSync
 import pureconfig.ConfigConvert.fromReaderAndWriter
 import pureconfig.ConfigSource
 import pureconfig.generic.auto._
-import reminder.api.{GPTConfig, Gpt4free}
-import reminder.bot.{BotConfig, TGBot}
-import reminder.dao.{DBConfig, DataBase}
+import reminder.api.Gpt4freeApi
+import reminder.bot.{BotConfig, Send, TGBot}
+import reminder.persistence.{DBConfig, DataBaseImpl}
+import reminder.gpt.{GPTConfig, Gpt4free}
 import reminder.notifier.Notifier
 import sttp.client3._
 import sttp.client3.asynchttpclient.cats.AsyncHttpClientCatsBackend
+
+import scala.language.higherKinds
 
 case class Configuration(bot: BotConfig, gpt: GPTConfig, database: DBConfig)
 
@@ -27,6 +33,8 @@ object Main extends IOApp {
       case Some(arg) => ConfigSource.string("token = \"" + arg + "\"")
       case None      => ConfigSource.string("")
     }
+
+  val log: SelfAwareStructuredLogger[IO] = LoggerFactory[IO].getLogger
 
   override def run(args: List[String]): IO[ExitCode] = {
     for {
@@ -47,25 +55,25 @@ object Main extends IOApp {
             } yield (asyncBackend, tgClient)
           ).use { case (asyncBackend, tgClient) =>
             for {
-              db <- DataBase[IO](cfg.database)
+              db <- DataBaseImpl[IO](cfg.database)
               bot <- TGBot[IO](
-                Gpt4free(asyncBackend, cfg.gpt),
+                Gpt4free[IO](Gpt4freeApi(asyncBackend, cfg.gpt), cfg.gpt),
                 cfg.bot,
                 db,
                 asyncBackend,
                 tgClient
               )
-              _ <- Notifier.run(bot, db).start
-              _ <- IO.println(s"reminder-bot started at ${DateTime.now.toIsoLikeDateTimeString()}")
+              _ <- Notifier.run(Send[IO](tgClient, Monad[IO], LoggerFactory[IO]), db).start
+              _ <- log.info(s"reminder-bot started at ${DateTime.now.toIsoLikeDateTimeString()}")
               start <- bot.run
                 .as(ExitCode.Success)
             } yield start
           }
         case Left(ex) =>
-          IO.println(
+          log.error(
             "Error, provide telegram bot api-key as an argument to run this bot, or use docker image with secret named 'bot' " +
               "also make sure bot.conf exists and configured"
-          ) *> IO.println(ex.prettyPrint()).as(ExitCode.Error)
+          ) *> log.error(ex.prettyPrint()).as(ExitCode.Error)
       }
     } yield startIO
   }
